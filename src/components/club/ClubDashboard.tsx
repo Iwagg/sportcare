@@ -1,249 +1,163 @@
-import React from 'react';
-import { Briefcase, Users, Eye, TrendingUp, Calendar, Star } from 'lucide-react';
-import { mockJobPostings, mockMatchResults, mockClubs } from '../../data/mockData';
+import { useState, useEffect } from 'react';
+import { Briefcase, Users, Eye, Star, Plus } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../context/AuthContext';
+import type { Club, JobPosting, MatchResult, Profile, AthleteProfile } from '../../types';
+import { Spinner, EmptyState } from '../ui/States';
 
 interface ClubDashboardProps {
   darkMode: boolean;
 }
 
 export default function ClubDashboard({ darkMode }: ClubDashboardProps) {
-  const club = mockClubs[0]; // Assuming current club
-  const activePostings = mockJobPostings.filter(p => p.status === 'active').length;
-  const totalViews = mockJobPostings.reduce((acc, p) => acc + p.views, 0);
-  const totalApplications = mockJobPostings.reduce((acc, p) => acc + p.applications, 0);
-  const avgMatchScore = mockMatchResults.reduce((acc, m) => acc + m.score, 0) / mockMatchResults.length;
+  const { user, profile } = useAuth();
+  const [club, setClub] = useState<Club | null>(null);
+  const [postings, setPostings] = useState<JobPosting[]>([]);
+  const [matches, setMatches] = useState<MatchResult[]>([]);
+  const [athletes, setAthletes] = useState<Record<string, { profile: Profile; athlete: AthleteProfile }>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { if (user) loadData(); }, [user]);
+
+  const loadData = async () => {
+    setLoading(true);
+    const { data: clubData } = await supabase.from('clubs').select('*').eq('user_id', user!.id).maybeSingle();
+    setClub(clubData as Club | null);
+
+    if (clubData) {
+      const { data: postData } = await supabase.from('job_postings').select('*').eq('club_id', clubData.id).order('created_at', { ascending: false });
+      setPostings((postData as JobPosting[]) || []);
+
+      const { data: matchData } = await supabase.from('matches').select('*').eq('job_posting_id', 'any').order('created_at', { ascending: false }).limit(10);
+      // Get matches for this club's postings
+      if (postData && postData.length > 0) {
+        const postingIds = postData.map(p => p.id);
+        const { data: md } = await supabase.from('matches').select('*').in('job_posting_id', postingIds).order('created_at', { ascending: false }).limit(10);
+        setMatches((md as MatchResult[]) || []);
+
+        // Load athlete profiles for matches
+        if (md && md.length > 0) {
+          const athleteIds = [...new Set(md.map(m => m.athlete_id))];
+          const { data: profData } = await supabase.from('profiles').select('*').in('id', athleteIds);
+          const { data: athData } = await supabase.from('athlete_profiles').select('*').in('user_id', athleteIds);
+          const map: Record<string, { profile: Profile; athlete: AthleteProfile }> = {};
+          (profData || []).forEach((p: Profile) => {
+            const ath = (athData || []).find((a: AthleteProfile) => a.user_id === p.id);
+            if (ath) map[p.id] = { profile: p, athlete: ath };
+          });
+          setAthletes(map);
+        }
+      }
+    }
+    setLoading(false);
+  };
+
+  if (loading) return <Spinner />;
+
+  if (!club) {
+    return (
+      <div className="space-y-6">
+        <h1 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Tableau de Bord Club</h1>
+        <div className={`p-6 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
+          <EmptyState icon={Briefcase} message="Profil club non configuré. Rendez-vous dans « Profil Club » pour le créer." darkMode={darkMode} />
+        </div>
+      </div>
+    );
+  }
+
+  const activePostings = postings.filter(p => p.status === 'active');
+  const totalViews = postings.reduce((a, p) => a + p.views, 0);
+  const totalApplications = postings.reduce((a, p) => a + p.applications, 0);
+  const avgScore = matches.length > 0 ? Math.round(matches.reduce((a, m) => a + m.score, 0) / matches.length) : 0;
 
   const stats = [
-    {
-      label: 'Offres actives',
-      value: activePostings.toString(),
-      change: '+2',
-      trend: 'up',
-      icon: Briefcase,
-      color: 'text-blue-600'
-    },
-    {
-      label: 'Vues totales',
-      value: totalViews.toString(),
-      change: '+15%',
-      trend: 'up',
-      icon: Eye,
-      color: 'text-green-600'
-    },
-    {
-      label: 'Candidatures',
-      value: totalApplications.toString(),
-      change: '+8',
-      trend: 'up',
-      icon: Users,
-      color: 'text-orange-600'
-    },
-    {
-      label: 'Score moyen',
-      value: avgMatchScore.toFixed(0) + '%',
-      change: '+5%',
-      trend: 'up',
-      icon: Star,
-      color: 'text-purple-600'
-    }
-  ];
-
-  const recentMatches = mockMatchResults.slice(0, 3);
-  const upcomingEvents = [
-    { id: 1, title: 'Entretien avec Antoine Martin', date: '2024-01-25', time: '14:00' },
-    { id: 2, title: 'Essai technique - Milieu offensif', date: '2024-01-27', time: '10:00' },
-    { id: 3, title: 'Réunion équipe recrutement', date: '2024-01-28', time: '16:00' },
+    { label: 'Offres actives', value: activePostings.length.toString(), icon: Briefcase, color: 'text-blue-600' },
+    { label: 'Vues totales', value: totalViews.toString(), icon: Eye, color: 'text-green-600' },
+    { label: 'Candidatures', value: totalApplications.toString(), icon: Users, color: 'text-orange-600' },
+    { label: 'Score moyen', value: `${avgScore}%`, icon: Star, color: 'text-cyan-600' },
   ];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-            Tableau de Bord Club
-          </h1>
-          <p className={`text-lg ${darkMode ? 'text-gray-400' : 'text-gray-600'} mt-1`}>
-            Bienvenue {club.name} - Gestion de vos recrutements
-          </p>
+          <h1 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Tableau de Bord Club</h1>
+          <p className={`text-lg ${darkMode ? 'text-gray-400' : 'text-gray-600'} mt-1`}>Bienvenue {club.name} - Gestion de vos recrutements</p>
         </div>
-        <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors duration-200 flex items-center gap-2">
-          <Briefcase className="w-4 h-4" />
-          Nouvelle offre
-        </button>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {stats.map((stat, index) => {
-          const Icon = stat.icon;
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+        {stats.map((s, i) => {
+          const Icon = s.icon;
           return (
-            <div
-              key={index}
-              className={`p-6 rounded-xl border ${
-                darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
-              } hover:shadow-lg transition-shadow duration-200`}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <div className={`p-2 rounded-lg ${darkMode ? 'bg-gray-700' : 'bg-gray-100'}`}>
-                  <Icon className={`w-6 h-6 ${stat.color}`} />
-                </div>
-                <span className="text-sm font-medium text-green-600">
-                  {stat.change}
-                </span>
-              </div>
-              <div>
-                <p className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                  {stat.value}
-                </p>
-                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                  {stat.label}
-                </p>
-              </div>
+            <div key={i} className={`p-6 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} hover:shadow-lg transition-shadow`}>
+              <div className={`p-2 rounded-lg inline-block mb-4 ${darkMode ? 'bg-gray-700' : 'bg-gray-100'}`}><Icon className={`w-6 h-6 ${s.color}`} /></div>
+              <p className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{s.value}</p>
+              <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{s.label}</p>
             </div>
           );
         })}
       </div>
 
-      {/* Recent Matches & Upcoming Events */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className={`p-6 rounded-xl border ${
-          darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
-        }`}>
-          <h2 className={`text-xl font-semibold mb-4 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-            Candidats Récents
-          </h2>
+      <div className={`p-6 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
+        <h2 className={`text-xl font-semibold mb-4 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Candidats Récents</h2>
+        {matches.length > 0 ? (
           <div className="space-y-3">
-            {recentMatches.map((match) => (
-              <div key={match.id} className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center">
-                    <Users className="w-5 h-5 text-white" />
+            {matches.slice(0, 5).map((match) => {
+              const athleteInfo = athletes[match.athlete_id];
+              return (
+                <div key={match.id} className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center text-white font-bold">
+                      {(athleteInfo?.profile.first_name || 'A').charAt(0)}
+                    </div>
+                    <div>
+                      <p className={`font-medium ${darkMode ? 'text-gray-200' : 'text-gray-700'}`}>
+                        {athleteInfo ? `${athleteInfo.profile.first_name} ${athleteInfo.profile.last_name}` : 'Candidat'}
+                      </p>
+                      <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{new Date(match.created_at).toLocaleDateString('fr-FR')}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className={`font-medium ${darkMode ? 'text-gray-200' : 'text-gray-700'}`}>
-                      Candidat #{match.athleteId}
-                    </p>
-                    <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      {new Date(match.createdAt).toLocaleDateString('fr-FR')}
-                    </p>
-                  </div>
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${match.score >= 90 ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : match.score >= 70 ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'}`}>{match.score}%</span>
                 </div>
-                <div className="text-right">
-                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                    match.score >= 90 
-                      ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                      : match.score >= 70 
-                      ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
-                      : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                  }`}>
-                    {match.score}%
-                  </span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        </div>
-
-        <div className={`p-6 rounded-xl border ${
-          darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
-        }`}>
-          <h2 className={`text-xl font-semibold mb-4 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-            Événements à Venir
-          </h2>
-          <div className="space-y-3">
-            {upcomingEvents.map((event) => (
-              <div key={event.id} className="flex items-center gap-3">
-                <div className="w-3 h-3 bg-green-500 rounded-full" />
-                <div className="flex-1">
-                  <p className={`font-medium ${darkMode ? 'text-gray-200' : 'text-gray-700'}`}>
-                    {event.title}
-                  </p>
-                  <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                    {new Date(event.date).toLocaleDateString('fr-FR')} - {event.time}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        ) : (
+          <EmptyState icon={Users} message="Aucun candidat pour le moment" darkMode={darkMode} />
+        )}
       </div>
 
-      {/* Active Job Postings */}
-      <div className={`p-6 rounded-xl border ${
-        darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
-      }`}>
-        <h2 className={`text-xl font-semibold mb-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-          Offres Actives
-        </h2>
-        <div className="space-y-4">
-          {mockJobPostings.filter(p => p.status === 'active').map((posting) => (
-            <div
-              key={posting.id}
-              className={`p-4 rounded-lg border ${
-                darkMode ? 'bg-gray-700/50 border-gray-600' : 'bg-gray-50 border-gray-200'
-              } hover:shadow-md transition-shadow duration-200`}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <div className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    posting.type === 'recruitment' 
-                      ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
-                      : posting.type === 'trial'
-                      ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                      : 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400'
-                  }`}>
-                    {posting.type === 'recruitment' ? 'Recrutement' : 
-                     posting.type === 'trial' ? 'Essai' : 'Temporaire'}
+      <div className={`p-6 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
+        <h2 className={`text-xl font-semibold mb-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Offres Actives</h2>
+        {activePostings.length > 0 ? (
+          <div className="space-y-4">
+            {activePostings.map((posting) => (
+              <div key={posting.id} className={`p-4 rounded-lg border ${darkMode ? 'bg-gray-700/50 border-gray-600' : 'bg-gray-50 border-gray-200'}`}>
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <div className="flex items-center gap-3">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${posting.type === 'recruitment' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' : posting.type === 'trial' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400'}`}>
+                      {posting.type === 'recruitment' ? 'Recrutement' : posting.type === 'trial' ? 'Essai' : posting.type === 'loan' ? 'Prêt' : 'Temporaire'}
+                    </span>
+                    <h3 className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{posting.title}</h3>
                   </div>
-                  <h3 className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                    {posting.title}
-                  </h3>
+                  <div className="flex items-center gap-4 text-sm">
+                    <div className="flex items-center gap-1"><Eye className="w-4 h-4 text-gray-500" /><span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>{posting.views}</span></div>
+                    <div className="flex items-center gap-1"><Users className="w-4 h-4 text-gray-500" /><span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>{posting.applications}</span></div>
+                  </div>
                 </div>
-                <div className="flex items-center gap-4 text-sm">
-                  <div className="flex items-center gap-1">
-                    <Eye className="w-4 h-4 text-gray-500" />
-                    <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>
-                      {posting.views}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Users className="w-4 h-4 text-gray-500" />
-                    <span className={darkMode ? 'text-gray-400' : 'text-gray-600'}>
-                      {posting.applications}
-                    </span>
-                  </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                  <div><span className={`block ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Poste</span><span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{posting.position}</span></div>
+                  <div><span className={`block ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Niveau</span><span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{posting.requirements.level || 'N/A'}</span></div>
+                  <div><span className={`block ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Disponibilité</span><span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{posting.availability_date ? new Date(posting.availability_date).toLocaleDateString('fr-FR') : 'N/A'}</span></div>
+                  <div><span className={`block ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Expire le</span><span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{posting.expiry_date ? new Date(posting.expiry_date).toLocaleDateString('fr-FR') : 'N/A'}</span></div>
                 </div>
               </div>
-              
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <span className={`block ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Poste</span>
-                  <span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                    {posting.position}
-                  </span>
-                </div>
-                <div>
-                  <span className={`block ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Âge</span>
-                  <span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                    {posting.requirements.ageMin}-{posting.requirements.ageMax} ans
-                  </span>
-                </div>
-                <div>
-                  <span className={`block ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Niveau</span>
-                  <span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                    {posting.requirements.level}
-                  </span>
-                </div>
-                <div>
-                  <span className={`block ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Expire le</span>
-                  <span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                    {new Date(posting.expiryDate).toLocaleDateString('fr-FR')}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState icon={Briefcase} message="Aucune offre active. Publiez votre première offre !" darkMode={darkMode} />
+        )}
       </div>
     </div>
   );
